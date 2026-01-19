@@ -45,7 +45,7 @@ const getBatchById = async (req, res) => {
         teacher,
         course_id,
         total_sessions,
-        course:courses(course_name),
+        course:courses(course_name, type),
         center_details:centers!inner(
           center_id,
           center_name
@@ -69,6 +69,7 @@ const getBatchById = async (req, res) => {
     const transformedData = {
       ...data,
       course_name: data.course?.course_name,
+      course_type: data.course?.type,
       center_name: data.center_details?.center_name,
       course: undefined, // Remove nested object
       center_details: undefined // Remove nested object
@@ -167,6 +168,49 @@ const createBatch = async (req, res) => {
 
     if (error) throw error;
 
+    // Create notifications for assigned teachers
+    const batchName = data.batch_name || 'a new batch';
+    
+    // Notify main teacher if assigned
+    if (data.teacher) {
+      const title = `New Batch Assigned 🎉`;
+      const message = `You have been assigned as the main teacher for batch ${batchName}.`;
+      const fullMessage = `${title}\n${message}`;
+      
+      const { error: mainTeacherNotifError } = await supabaseAdmin
+        .from("teacher_notifications")
+        .insert({
+          teacher_id: data.teacher,
+          title: title,
+          message: message,
+          is_read: false,
+        });
+      
+      if (mainTeacherNotifError) {
+        console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+      }
+    }
+    
+    // Notify assistant teacher if assigned
+    if (data.assistant_tutor) {
+      const title = `New Batch Assigned 🎉`;
+      const message = `You have been assigned as the assistant teacher for batch ${batchName}.`;
+      const fullMessage = `${title}\n${message}`;
+      
+      const { error: assistantNotifError } = await supabaseAdmin
+        .from("teacher_notifications")
+        .insert({
+          teacher_id: data.assistant_tutor,
+          title: title,
+          message: message,
+          is_read: false,
+        });
+      
+      if (assistantNotifError) {
+        console.error("Error creating notification for assistant teacher:", assistantNotifError);
+      }
+    }
+
     res.status(201).json({
       success: true,
       data,
@@ -190,6 +234,17 @@ const updateBatch = async (req, res) => {
     const updateData = req.body;
     const userId = req.user.id; // Get user ID from JWT token
 
+    // Get existing batch data to check for teacher changes
+    const { data: existingBatch, error: fetchError } = await supabase
+      .from('batches')
+      .select('teacher, assistant_tutor, batch_name')
+      .eq('batch_id', id)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      throw fetchError;
+    }
+
     // Add updated_by field
     const batchWithUpdater = {
       ...updateData,
@@ -212,6 +267,47 @@ const updateBatch = async (req, res) => {
         });
       }
       throw error;
+    }
+
+    // Create notifications for newly assigned teachers
+    const batchName = data.batch_name || existingBatch?.batch_name || 'a batch';
+    
+    // Check if main teacher was changed/assigned
+    if (updateData.teacher && updateData.teacher !== existingBatch?.teacher) {
+      const title = `Batch Assigned 🎉`;
+      const message = `You have been assigned as the main teacher for batch ${batchName}.`;
+      
+      const { error: mainTeacherNotifError } = await supabaseAdmin
+        .from("teacher_notifications")
+        .insert({
+          teacher_id: updateData.teacher,
+          title: title,
+          message: message,
+          is_read: false,
+        });
+      
+      if (mainTeacherNotifError) {
+        console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+      }
+    }
+    
+    // Check if assistant teacher was changed/assigned
+    if (updateData.assistant_tutor && updateData.assistant_tutor !== existingBatch?.assistant_tutor) {
+      const title = `Batch Assigned 🎉`;
+      const message = `You have been assigned as the assistant teacher for batch ${batchName}.`;
+      
+      const { error: assistantNotifError } = await supabaseAdmin
+        .from("teacher_notifications")
+        .insert({
+          teacher_id: updateData.assistant_tutor,
+          title: title,
+          message: message,
+          is_read: false,
+        });
+      
+      if (assistantNotifError) {
+        console.error("Error creating notification for assistant teacher:", assistantNotifError);
+      }
     }
 
     res.status(200).json({

@@ -157,11 +157,118 @@ const getTeacherBatches = async (req, res) => {
       });
     }
 
-    // Convert map to array and transform
+    // Convert map to array
     const allBatches = Array.from(batchesMap.values());
     
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+    console.log(`[getTeacherBatches] Teacher ID: ${teacher_id}, Today: ${today}`);
+    
+    // Fetch approved leave requests for this teacher
+    // Only hide batches if today's date falls within the leave period (date_from <= today <= date_to)
+    // This means:
+    // - If from_date is in the future, batch remains visible
+    // - If from_date has arrived, batch is hidden
+    // - If to_date has passed, batch becomes visible again
+    const { data: allApprovedRequests, error: leaveRequestError } = await supabaseAdmin
+      .from('teacher_batch_requests')
+      .select('batch_id, date_from, date_to, status, request_type')
+      .eq('main_teacher_id', teacher_id)
+      .eq('status', 'APPROVED')
+      .eq('request_type', 'LEAVE'); // Only filter LEAVE requests, not SUB_TEACHER
+    
+    if (leaveRequestError) {
+      console.error('[getTeacherBatches] Error fetching leave requests:', leaveRequestError);
+      // Continue without filtering if there's an error
+    }
+    
+    console.log(`[getTeacherBatches] Found ${allApprovedRequests?.length || 0} approved LEAVE requests for teacher ${teacher_id}`);
+    if (allApprovedRequests && allApprovedRequests.length > 0) {
+      console.log('[getTeacherBatches] Approved requests:', JSON.stringify(allApprovedRequests, null, 2));
+    }
+    
+    // Filter to only include requests where today falls within the date range
+    // Batch should be hidden only if: date_from <= today <= date_to
+    const activeLeaveRequests = (allApprovedRequests || []).filter(request => {
+      try {
+        // Get dates from request (Supabase returns date type as YYYY-MM-DD string)
+        let fromDateStr = request.date_from;
+        let toDateStr = request.date_to;
+        
+        // Handle different date formats
+        if (fromDateStr && typeof fromDateStr === 'string') {
+          // If it's a string, extract just the date part (YYYY-MM-DD)
+          fromDateStr = fromDateStr.split('T')[0].split(' ')[0];
+        } else if (fromDateStr) {
+          // If it's a Date object or other format, convert to YYYY-MM-DD
+          fromDateStr = new Date(fromDateStr).toISOString().split('T')[0];
+        }
+        
+        if (toDateStr && typeof toDateStr === 'string') {
+          toDateStr = toDateStr.split('T')[0].split(' ')[0];
+        } else if (toDateStr) {
+          toDateStr = new Date(toDateStr).toISOString().split('T')[0];
+        }
+        
+        if (!fromDateStr || !toDateStr) {
+          console.log(`[Leave Request] Skipping request - missing dates. From: ${request.date_from}, To: ${request.date_to}`);
+          return false; // Skip if dates are missing
+        }
+        
+        // Convert to Date objects for proper comparison
+        const fromDate = new Date(fromDateStr);
+        const toDate = new Date(toDateStr);
+        const todayDate = new Date(today);
+        
+        // Reset time to midnight for accurate date-only comparison
+        fromDate.setHours(0, 0, 0, 0);
+        toDate.setHours(0, 0, 0, 0);
+        todayDate.setHours(0, 0, 0, 0);
+        
+        // Check if today is within the leave period (inclusive)
+        // Hide batch only if: fromDate <= today <= toDate
+        const isActive = fromDate <= todayDate && toDate >= todayDate;
+        
+        // Debug logging - ALWAYS log, not just when active
+        console.log(`[Leave Request] Checking batch ${request.batch_id} - From: ${fromDateStr}, To: ${toDateStr}, Today: ${today}, IsActive: ${isActive}`);
+        console.log(`[Leave Request] Date comparison - fromDate (${fromDateStr}) <= today (${today}): ${fromDateStr <= today}, toDate (${toDateStr}) >= today (${today}): ${toDateStr >= today}`);
+        
+        return isActive;
+      } catch (error) {
+        console.error(`[Leave Request] Error processing request for batch ${request.batch_id}:`, error);
+        return false; // Skip on error
+      }
+    });
+    
+    // Create a set of batch_ids that should be hidden (have active approved leave requests)
+    const hiddenBatchIds = new Set();
+    if (activeLeaveRequests && activeLeaveRequests.length > 0) {
+      console.log(`[getTeacherBatches] Hiding ${activeLeaveRequests.length} batches due to active leave requests`);
+      activeLeaveRequests.forEach(request => {
+        hiddenBatchIds.add(request.batch_id);
+        console.log(`[getTeacherBatches] Hiding batch_id: ${request.batch_id}`);
+      });
+    } else {
+      console.log(`[getTeacherBatches] No active leave requests - all batches will be visible`);
+    }
+    
+    // Debug logging - ALWAYS log
+    console.log(`[getTeacherBatches] Teacher ${teacher_id} - Total approved LEAVE requests: ${allApprovedRequests?.length || 0}, Active (hiding batches): ${activeLeaveRequests.length}, Today: ${today}`);
+    console.log(`[getTeacherBatches] Total batches before filtering: ${allBatches.length}, Hidden batch IDs:`, Array.from(hiddenBatchIds));
+    
+    // Filter out batches that have active approved leave requests
+    const visibleBatches = allBatches.filter(batch => {
+      const shouldHide = hiddenBatchIds.has(batch.batch_id);
+      if (shouldHide) {
+        console.log(`[getTeacherBatches] Filtering out batch ${batch.batch_id} (${batch.batch_name}) - has active leave request`);
+      }
+      return !shouldHide;
+    });
+    
+    console.log(`[getTeacherBatches] Total batches after filtering: ${visibleBatches.length}`);
+    
     // Transform the response to include center name and course details
-    const transformedData = allBatches.map(batch => ({
+    const transformedData = visibleBatches.map(batch => ({
       ...batch,
       center_name: batch.center_details?.center_name,
       course_name: batch.course_details?.course_name,

@@ -34,6 +34,7 @@ const leadsRoutes = require("./routes/leadsRoutes");
 const tutorInfoRoutes = require("./routes/tutorInfoRoute");
 const demoRoutes = require("./routes/demoRoutes");
 const subTeacherRoutes = require("./routes/subTeacherRoutes");
+const academicNotificationsRoutes = require("./routes/academicNotificationsRoutes");
 
 
 
@@ -70,6 +71,7 @@ app.use("/api", influencerRoutes);
 app.use("/api", cardAdminRoutes);
 app.use("/api", demoRoutes);
 app.use("/api", subTeacherRoutes);
+app.use("/api", academicNotificationsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

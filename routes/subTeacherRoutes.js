@@ -7,6 +7,8 @@ const router = express.Router();
 // Teacher endpoints
 router.post('/teacher/leave-requests', authMiddleware, ctrl.createRequest);
 router.get('/teacher/leave-requests', authMiddleware, ctrl.getMyRequests);
+router.put('/teacher/leave-requests/:id', authMiddleware, ctrl.updateRequest);
+router.delete('/teacher/leave-requests/:id', authMiddleware, ctrl.deleteRequest);
 router.get('/teacher/effective-batches', authMiddleware, ctrl.getEffectiveBatchesForDate);
 
 // Academic/Admin endpoints

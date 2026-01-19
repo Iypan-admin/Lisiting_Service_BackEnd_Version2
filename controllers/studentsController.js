@@ -75,20 +75,47 @@ const getStudentById = async (req, res) => {
 
     const { data, error } = await supabase
       .from('students')
-      .select('student_id, created_at, registration_number, name, state, center, email, phone, status')
+      .select(`
+        student_id, 
+        created_at, 
+        registration_number, 
+        name, 
+        state, 
+        center, 
+        email, 
+        phone, 
+        status,
+        is_referred,
+        referred_by_center,
+        center_details:centers!students_center_fkey(center_id, center_name),
+        referring_center:centers!students_referred_by_center_fkey(center_id, center_name),
+        state_details:state(state_name)
+      `)
       .eq('student_id', id)
       .single();
 
     if (error) {
+      console.error('Error fetching student:', error);
       return res.status(404).json({
         success: false,
         message: 'Student not found.',
       });
     }
 
+    // Transform the response to include center name, referring center name, and state name
+    const transformedData = {
+      ...data,
+      center_name: data.center_details?.center_name || null,
+      referring_center_name: (data.is_referred && data.referring_center?.center_name) ? data.referring_center.center_name : null,
+      state_name: data.state_details?.state_name || null,
+      center_details: undefined, // Remove the nested object
+      referring_center: undefined, // Remove the nested object
+      state_details: undefined // Remove the nested object
+    };
+
     res.status(200).json({
       success: true,
-      data,
+      data: transformedData,
     });
   } catch (error) {
     console.error('Error fetching student by ID:', error);

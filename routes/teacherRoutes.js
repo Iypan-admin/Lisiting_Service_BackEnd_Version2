@@ -2,6 +2,7 @@
 
 const express = require('express');
 const teachersController = require('../controllers/teachersController');
+const teacherNotificationsController = require('../controllers/teacherNotificationsController');
 const authMiddleware = require('../middleware/authMiddleware'); // Fix: 'middleware' instead of 'middlewares'
 
 const router = express.Router();
@@ -21,5 +22,9 @@ router.get('/teacher/my-id', authMiddleware, teachersController.getMyTeacherId);
 
 // Add this new route
 router.get('/center/:centerId/teachers', authMiddleware, teachersController.getTeachersByCenter);
+
+// Teacher notifications endpoints
+router.get('/teacher/notifications', authMiddleware, teacherNotificationsController.getNotifications);
+router.patch('/teacher/notifications/:id', authMiddleware, teacherNotificationsController.markAsRead);
 
 module.exports = router;

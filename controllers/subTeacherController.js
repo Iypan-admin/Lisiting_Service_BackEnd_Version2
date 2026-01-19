@@ -25,14 +25,22 @@ const createRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-    // Verify batch belongs to this teacher
-    const { data: batchData, error: batchErr } = await supabase
+    // Verify batch belongs to this teacher (either as main teacher or assistant tutor)
+    const { data: batchData, error: batchErr } = await supabaseAdmin
       .from("batches")
-      .select("batch_id")
+      .select("batch_id, batch_name, teacher, assistant_tutor")
       .eq("batch_id", batch_id)
-      .eq("teacher", teacherId)
       .single();
+    
     if (batchErr || !batchData) {
+      return res.status(403).json({ success: false, message: "Batch not found" });
+    }
+
+    // Check if teacher is main teacher or assistant tutor
+    const isMainTeacher = batchData.teacher === teacherId;
+    const isAssistantTutor = batchData.assistant_tutor === teacherId;
+    
+    if (!isMainTeacher && !isAssistantTutor) {
       return res.status(403).json({ success: false, message: "Batch not owned by teacher" });
     }
 
@@ -53,6 +61,63 @@ const createRequest = async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Create notification for Academic Coordinators when teacher requests leave
+    // Only send notification for LEAVE requests (not SUB_TEACHER requests)
+    if (request_type === 'LEAVE') {
+      try {
+        // Get teacher's name from users table
+        const { data: teacherUserData, error: teacherUserError } = await supabaseAdmin
+          .from("teachers")
+          .select("teacher_info:users!teachers_teacher_fkey(full_name, name)")
+          .eq("teacher_id", teacherId)
+          .single();
+
+        let teacherName = "Teacher";
+        if (!teacherUserError && teacherUserData?.teacher_info) {
+          teacherName = teacherUserData.teacher_info.full_name || teacherUserData.teacher_info.name || "Teacher";
+        }
+
+        // Determine teacher role
+        const teacherRole = isMainTeacher ? "Main Teacher" : "Assistant Tutor";
+        const batchName = batchData.batch_name || batch_id;
+
+        // Get all academic coordinators
+        const { data: academicCoordinators, error: coordError } = await supabaseAdmin
+          .from('academic_coordinator')
+          .select('user_id');
+
+        if (!coordError && academicCoordinators && academicCoordinators.length > 0) {
+          // Create notification message
+          const notificationMessage = `In batch ${batchName}, ${teacherName} (${teacherRole}) is requesting leave approval`;
+
+          // Create notification for each academic coordinator
+          const notifications = academicCoordinators.map(coord => ({
+            academic_coordinator_id: coord.user_id,
+            message: notificationMessage,
+            type: 'TEACHER_LEAVE_REQUEST',
+            related_id: data.id,
+            is_read: false
+          }));
+
+          // Insert notifications into academic_notifications table
+          const { error: notifError } = await supabaseAdmin
+            .from('academic_notifications')
+            .insert(notifications);
+
+          if (notifError) {
+            console.error('Error creating academic notifications for leave request:', notifError);
+            // Don't fail the request if notification creation fails
+          } else {
+            console.log(`✅ Notifications sent to ${academicCoordinators.length} academic coordinator(s) for leave request from ${teacherName}`);
+          }
+        }
+      } catch (notifErr) {
+        console.error('Error in notification creation for leave request:', notifErr);
+        // Don't fail the request if notification creation fails
+      }
+    }
+
     return res.status(201).json({ success: true, message: "Request submitted successfully" });
   } catch (e) {
     console.error("createRequest error", e);
@@ -85,6 +150,118 @@ const getMyRequests = async (req, res) => {
   }
 };
 
+// Teacher updates own request (only if status is PENDING)
+const updateRequest = async (req, res) => {
+  try {
+    const { id: user_id, role } = req.user;
+    if (role !== "teacher") return res.status(403).json({ success: false, message: "Forbidden" });
+
+    const teacherId = await getCurrentTeacherId(user_id);
+    if (!teacherId) return res.status(404).json({ success: false, message: "Teacher not found" });
+
+    const { id } = req.params;
+    const { batch_id, request_type, reason, date_from, date_to } = req.body;
+
+    if (!batch_id || !request_type || !date_from || !date_to) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    // Verify the request belongs to this teacher and is PENDING
+    const { data: existingRequest, error: fetchError } = await supabaseAdmin
+      .from("teacher_batch_requests")
+      .select("id, main_teacher_id, status")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !existingRequest) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+
+    if (existingRequest.main_teacher_id !== teacherId) {
+      return res.status(403).json({ success: false, message: "You can only update your own requests" });
+    }
+
+    if (existingRequest.status !== "PENDING") {
+      return res.status(400).json({ success: false, message: "Only PENDING requests can be updated" });
+    }
+
+    // Verify batch belongs to this teacher
+    const { data: batchData, error: batchErr } = await supabase
+      .from("batches")
+      .select("batch_id")
+      .eq("batch_id", batch_id)
+      .eq("teacher", teacherId)
+      .single();
+    if (batchErr || !batchData) {
+      return res.status(403).json({ success: false, message: "Batch not owned by teacher" });
+    }
+
+    // Update the request
+    const { data, error } = await supabase
+      .from("teacher_batch_requests")
+      .update({
+        batch_id,
+        request_type,
+        reason: reason || null,
+        date_from,
+        date_to,
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return res.status(200).json({ success: true, message: "Request updated successfully", data });
+  } catch (e) {
+    console.error("updateRequest error", e);
+    return res.status(500).json({ success: false, message: "Failed to update request" });
+  }
+};
+
+// Teacher deletes own request (only if status is PENDING)
+const deleteRequest = async (req, res) => {
+  try {
+    const { id: user_id, role } = req.user;
+    if (role !== "teacher") return res.status(403).json({ success: false, message: "Forbidden" });
+
+    const teacherId = await getCurrentTeacherId(user_id);
+    if (!teacherId) return res.status(404).json({ success: false, message: "Teacher not found" });
+
+    const { id } = req.params;
+
+    // Verify the request belongs to this teacher and is PENDING
+    const { data: existingRequest, error: fetchError } = await supabaseAdmin
+      .from("teacher_batch_requests")
+      .select("id, main_teacher_id, status")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !existingRequest) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+
+    if (existingRequest.main_teacher_id !== teacherId) {
+      return res.status(403).json({ success: false, message: "You can only delete your own requests" });
+    }
+
+    if (existingRequest.status !== "PENDING") {
+      return res.status(400).json({ success: false, message: "Only PENDING requests can be deleted" });
+    }
+
+    // Delete the request
+    const { error } = await supabaseAdmin
+      .from("teacher_batch_requests")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+    return res.status(200).json({ success: true, message: "Request deleted successfully" });
+  } catch (e) {
+    console.error("deleteRequest error", e);
+    return res.status(500).json({ success: false, message: "Failed to delete request" });
+  }
+};
+
 // Admin list requests (filterable by status)
 const adminListRequests = async (req, res) => {
   try {
@@ -94,8 +271,8 @@ const adminListRequests = async (req, res) => {
     let q = supabaseAdmin
       .from("teacher_batch_requests")
       .select(
-        `id, request_type, reason, date_from, date_to, status, created_at,
-         batch:batches(batch_id, batch_name, center, course_id),
+        `id, request_type, reason, date_from, date_to, status, created_at, main_teacher_id,
+         batch:batches(batch_id, batch_name, center, course_id, teacher, assistant_tutor),
          main_teacher:teachers!teacher_batch_requests_main_teacher_id_fkey(
            teacher_id,
            teacher_info:users!teachers_teacher_fkey(id, name, full_name)
@@ -137,6 +314,17 @@ const approveRequest = async (req, res) => {
       }
     }
 
+    // First, get the request details to create notification
+    const { data: requestData, error: requestError } = await supabaseAdmin
+      .from("teacher_batch_requests")
+      .select("main_teacher_id, batch_id, request_type, date_from, date_to, batch:batches(batch_name)")
+      .eq("id", id)
+      .single();
+    
+    if (requestError || !requestData) {
+      return res.status(404).json({ success: false, message: "Request not found" });
+    }
+
     const { data, error } = await supabase
       .from("teacher_batch_requests")
       .update({ status: "APPROVED", sub_teacher_id: resolvedSubTeacherId, approved_by: user_id, approved_at: new Date().toISOString() })
@@ -144,6 +332,29 @@ const approveRequest = async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    // Create notification for the teacher
+    const batchName = requestData.batch?.batch_name || "your batch";
+    const requestTypeText = requestData.request_type === 'LEAVE' ? 'Leave' : 'Sub-Teacher';
+    // Format: Title on first line, message on second line (matching image design)
+    const title = `Your ${requestTypeText} has been approved 🎉`;
+    const message = `Your ${requestTypeText} request for batch ${batchName} (${requestData.date_from} to ${requestData.date_to}) has been approved.`;
+    const fullMessage = `${title}\n${message}`;
+    
+    const { error: notifError } = await supabaseAdmin
+      .from("teacher_notifications")
+      .insert({
+        teacher: requestData.main_teacher_id,
+        message: fullMessage,
+        type: 'LEAVE_APPROVED',
+        related_id: id
+      });
+
+    if (notifError) {
+      console.error("Error creating notification:", notifError);
+      // Don't fail the request if notification fails
+    }
+
     return res.status(200).json({ success: true, data });
   } catch (e) {
     console.error("approveRequest error", e);
@@ -191,9 +402,19 @@ const getEffectiveBatchesForDate = async (req, res) => {
       .in("status", ["APPROVED", "Approved"]) 
       .in("sub_teacher_id", [teacherId, user_id]);
     if (subErr) throw subErr;
+    // Filter sub teacher assignments for this date
+    // Use date_from (actual assignment period), NOT approved_at
     const asSub = (asSubRows || []).filter(r => {
-      const visStart = r.approved_at ? new Date(r.approved_at).toISOString().slice(0,10) : r.date_from;
-      return visStart <= date && r.date_to >= date;
+      // Always use date_from for comparison, not approved_at
+      const fromDateStr = r.date_from ? (typeof r.date_from === 'string' ? r.date_from.split('T')[0] : new Date(r.date_from).toISOString().split('T')[0]) : null;
+      const toDateStr = r.date_to ? (typeof r.date_to === 'string' ? r.date_to.split('T')[0] : new Date(r.date_to).toISOString().split('T')[0]) : null;
+      
+      if (!fromDateStr || !toDateStr) {
+        return false;
+      }
+      
+      // Check if the query date falls within the assignment period (inclusive)
+      return fromDateStr <= date && toDateStr >= date;
     }).map(r => ({ batch_id: r.batch_id, date_from: r.date_from, date_to: r.date_to }));
     console.log("[resolver] asSub count=", asSub.length);
 
@@ -214,17 +435,33 @@ const getEffectiveBatchesForDate = async (req, res) => {
     console.log("[resolver] assistantTutorBatches count=", (assistantTutorBatches || []).length);
 
     // Get all approved leave requests for this date (to check who is on leave)
+    // IMPORTANT: Only filter LEAVE type requests, and only use date_from (not approved_at)
     const { data: allLeaveRequests, error: leaveErr } = await supabaseAdmin
         .from("teacher_batch_requests")
-      .select("batch_id, main_teacher_id, approved_at, date_from, date_to")
-      .in("status", ["APPROVED", "Approved"]);
+      .select("batch_id, main_teacher_id, approved_at, date_from, date_to, request_type")
+      .in("status", ["APPROVED", "Approved"])
+      .eq("request_type", "LEAVE"); // Only LEAVE requests, not SUB_TEACHER
     if (leaveErr) throw leaveErr;
 
     // Filter leave requests for this date
+    // CRITICAL: Use date_from (actual leave start date), NOT approved_at
+    // Batch should only be hidden when: date_from <= date <= date_to
     const activeLeaveRequests = (allLeaveRequests || []).filter(r => {
-        const visStart = r.approved_at ? new Date(r.approved_at).toISOString().slice(0,10) : r.date_from;
-        return visStart <= date && r.date_to >= date;
+        // Always use date_from for comparison, not approved_at
+        // This ensures batches are only hidden during the actual leave period
+        const fromDateStr = r.date_from ? (typeof r.date_from === 'string' ? r.date_from.split('T')[0] : new Date(r.date_from).toISOString().split('T')[0]) : null;
+        const toDateStr = r.date_to ? (typeof r.date_to === 'string' ? r.date_to.split('T')[0] : new Date(r.date_to).toISOString().split('T')[0]) : null;
+        
+        if (!fromDateStr || !toDateStr) {
+          console.log(`[resolver] Skipping leave request - missing dates. From: ${r.date_from}, To: ${r.date_to}`);
+          return false;
+        }
+        
+        // Check if the query date falls within the leave period (inclusive)
+        return fromDateStr <= date && toDateStr >= date;
       });
+    
+    console.log(`[resolver] Active leave requests for date ${date}:`, activeLeaveRequests.length);
 
     // Build maps for quick lookup
     const batchesWhereIAmOnLeave = new Set(
@@ -368,10 +605,12 @@ const getEffectiveBatchesForDate = async (req, res) => {
 module.exports = {
   createRequest,
   getMyRequests,
+  updateRequest,
   adminListRequests,
   approveRequest,
   rejectRequest,
   getEffectiveBatchesForDate,
+  deleteRequest,
 };
 
 
