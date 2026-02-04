@@ -1,6 +1,7 @@
 // controllers/batchesController.js
 
 const { supabase, supabaseAdmin } = require("../config/supabaseClient");
+const { withRetry } = require("../utils/httpClient");
 
 /**
  * Fetch all batches with optional pagination.
@@ -95,7 +96,7 @@ const getBatchesByCenter = async (req, res) => {
   try {
     const { centerId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('batches')
       .select(`
         batch_id,
@@ -105,17 +106,29 @@ const getBatchesByCenter = async (req, res) => {
         center,
         teacher,
         course_id,
+        status,
         course:courses(course_name, type, mode),
         center_details:centers!batches_center_fkey(center_id, center_name),
-        teacher_details:teachers(
+        teacher_details:teachers!batches_teacher_fkey(
           teacher_id,
           teacher:users(
             id,
             name
           )
+        ),
+        assistant_teacher_details:teachers!batches_assistant_tutor_fkey(
+          teacher_id,
+          teacher:users(
+            id,
+            name
+          )
+        ),
+        enrollment:enrollment(
+          enrollment_id,
+          student
         )
       `)
-      .eq('center', centerId);
+      .eq('center', centerId), 3, 2000, 'getBatchesByCenter');
 
     if (error) throw error;
 
@@ -127,9 +140,14 @@ const getBatchesByCenter = async (req, res) => {
       mode: batch.course?.mode,
       center_name: batch.center_details?.center_name,
       teacher_name: batch.teacher_details?.teacher?.name,
+      assistant_teacher_name: batch.assistant_teacher_details?.teacher?.name,
+      student_count: batch.enrollment?.length || 0,
+      status: batch.status || 'Pending',
       course: undefined,
       center_details: undefined,
-      teacher_details: undefined
+      teacher_details: undefined,
+      assistant_teacher_details: undefined,
+      enrollment: undefined
     }));
 
     res.status(200).json({

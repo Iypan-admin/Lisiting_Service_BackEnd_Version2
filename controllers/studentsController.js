@@ -1,6 +1,7 @@
 // controllers/studentsController.js
 
 const { supabase, supabaseAdmin } = require("../config/supabaseClient");
+const { withRetry } = require("../utils/httpClient");
 
 /**
  * Fetch all students without pagination, including first batch name.
@@ -401,7 +402,7 @@ const getReferredStudents = async (req, res) => {
   try {
     const { centerId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('students')
       .select(`
         student_id,
@@ -419,7 +420,7 @@ const getReferredStudents = async (req, res) => {
         state_details:state(state_name)
       `)
       .eq('referred_by_center', centerId)
-      .eq('is_referred', true);
+      .eq('is_referred', true), 3, 2000, 'getReferredStudents');
 
     if (error) throw error;
 

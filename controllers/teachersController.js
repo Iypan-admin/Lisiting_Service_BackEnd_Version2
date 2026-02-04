@@ -1,13 +1,14 @@
 // controllers/teachersController.js
 
 const { supabase, supabaseAdmin } = require("../config/supabaseClient");
+const { withRetry } = require("../utils/httpClient");
 
 /**
  * Fetch all teachers with optional pagination.
  */
 const getAllTeachers = async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('teachers')
       .select(`
         teacher_id,
@@ -15,7 +16,7 @@ const getAllTeachers = async (req, res) => {
         center,
         teacher,
         teacher_info:users!inner(id, name)
-      `);
+      `), 3, 2000, 'getAllTeachers');
 
     if (error) throw error;
 
@@ -47,11 +48,11 @@ const getTeacherById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('teachers')
       .select('teacher_id, created_at, center, teacher')
       .eq('teacher_id', id)
-      .single();
+      .single(), 3, 2000, 'getTeacherById');
 
     if (error) {
       return res.status(404).json({
@@ -80,12 +81,11 @@ const getTeacherBatches = async (req, res) => {
   try {
     const { id: user_id } = req.user; // Get user_id from auth middleware
 
-    // First, get the teacher record for this user
-    const { data: teacherData, error: teacherError } = await supabase
+    const { data: teacherData, error: teacherError } = await withRetry(() => supabase
       .from('teachers')
       .select('teacher_id')
       .eq('teacher', user_id)
-      .single();
+      .single(), 3, 2000, 'getTeacherBatches:find_id');
 
     if (teacherError || !teacherData) {
       return res.status(404).json({
@@ -97,7 +97,7 @@ const getTeacherBatches = async (req, res) => {
     const teacher_id = teacherData.teacher_id;
 
     // Fetch batches where teacher is the main teacher
-    const { data: mainTeacherBatches, error: mainTeacherError } = await supabase
+    const { data: mainTeacherBatches, error: mainTeacherError } = await withRetry(() => supabase
       .from('batches')
       .select(`
         batch_id,
@@ -114,12 +114,12 @@ const getTeacherBatches = async (req, res) => {
         center_details:centers!batches_center_fkey(center_id, center_name),
         course_details:courses(course_name, type)
       `)
-      .eq('teacher', teacher_id);
+      .eq('teacher', teacher_id), 3, 2000, 'getTeacherBatches:main');
 
     if (mainTeacherError) throw mainTeacherError;
 
     // Fetch batches where teacher is the assistant tutor
-    const { data: assistantTutorBatches, error: assistantTutorError } = await supabase
+    const { data: assistantTutorBatches, error: assistantTutorError } = await withRetry(() => supabase
       .from('batches')
       .select(`
         batch_id,
@@ -136,7 +136,7 @@ const getTeacherBatches = async (req, res) => {
         center_details:centers!batches_center_fkey(center_id, center_name),
         course_details:courses(course_name, type)
       `)
-      .eq('assistant_tutor', teacher_id);
+      .eq('assistant_tutor', teacher_id), 3, 2000, 'getTeacherBatches:assistant');
 
     if (assistantTutorError) throw assistantTutorError;
 
@@ -298,11 +298,11 @@ const getStudentsByTeacher = async (req, res) => {
     const { id: user_id } = req.user; // Get user_id from auth middleware
 
     // First, get the teacher record for this user
-    const { data: teacherData, error: teacherError } = await supabase
+    const { data: teacherData, error: teacherError } = await withRetry(() => supabase
       .from('teachers')
       .select('teacher_id')
       .eq('teacher', user_id)
-      .single();
+      .single(), 3, 2000, 'getStudentsByTeacher:findId');
 
     if (teacherError || !teacherData) {
       return res.status(404).json({
@@ -388,11 +388,11 @@ const getTeacherBatchStudents = async (req, res) => {
     const date = (req.query && req.query.date) ? req.query.date : new Date().toISOString().slice(0,10);
 
     // First, verify this teacher exists and get teacher_id
-    const { data: teacherData, error: teacherError } = await supabase
+    const { data: teacherData, error: teacherError } = await withRetry(() => supabase
       .from('teachers')
       .select('teacher_id')
       .eq('teacher', user_id)
-      .single();
+      .single(), 3, 2000, 'getTeacherBatchStudents:findId');
 
     if (teacherError || !teacherData) {
       return res.status(404).json({
@@ -405,23 +405,23 @@ const getTeacherBatchStudents = async (req, res) => {
     let isAuthorized = false;
     // 1) main teacher ownership
     {
-      const { data: batchData, error: batchError } = await supabase
+      const { data: batchData, error: batchError } = await withRetry(() => supabase
         .from('batches')
         .select('batch_id')
         .eq('teacher', teacherData.teacher_id)
         .eq('batch_id', batchId)
-        .single();
+        .single(), 3, 2000, 'getTeacherBatchStudents:mainCheck');
       if (!batchError && batchData) isAuthorized = true;
     }
 
     // 2) assistant tutor check
     if (!isAuthorized) {
-      const { data: assistantTutorBatch, error: assistantTutorError } = await supabase
+      const { data: assistantTutorBatch, error: assistantTutorError } = await withRetry(() => supabase
         .from('batches')
         .select('batch_id')
         .eq('assistant_tutor', teacherData.teacher_id)
         .eq('batch_id', batchId)
-        .single();
+        .single(), 3, 2000, 'getTeacherBatchStudents:assistantCheck');
       if (!assistantTutorError && assistantTutorBatch) isAuthorized = true;
     }
 
@@ -452,7 +452,7 @@ const getTeacherBatchStudents = async (req, res) => {
     }
 
     // Get students enrolled in this batch
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('enrollment')
       .select(`
         enrollment_id,
@@ -469,7 +469,7 @@ const getTeacherBatchStudents = async (req, res) => {
         batch_details:batches (batch_id, batch_name)
       `)
       .eq('batch', batchId)
-      .eq('status', true); // Only active enrollments
+      .eq('status', true), 3, 2000, 'getTeacherBatchStudents:list');
 
     if (error) throw error;
 
@@ -505,7 +505,7 @@ const getTeachersByCenter = async (req, res) => {
   try {
     const { centerId } = req.params;
 
-    const { data, error } = await supabase
+    const { data, error } = await withRetry(() => supabase
       .from('teachers')
       .select(`
         teacher_id,
@@ -515,10 +515,11 @@ const getTeachersByCenter = async (req, res) => {
         teacher_info:users!inner(
           id, 
           name,
-          full_name
+          full_name,
+          role
         )
       `)
-      .eq('center', centerId);
+      .eq('center', centerId), 3, 2000, 'getTeachersByCenter');
 
     if (error) throw error;
 
@@ -527,6 +528,7 @@ const getTeachersByCenter = async (req, res) => {
       ...teacher,
       teacher_name: teacher.teacher_info?.name,
       teacher_full_name: teacher.teacher_info?.full_name,
+      role: teacher.teacher_info?.role,
       email: teacher.teacher_info?.email,
       teacher_info: undefined // Remove the nested object
     }));
@@ -552,11 +554,11 @@ const getMyTeacherId = async (req, res) => {
     const { id: user_id } = req.user; // Get user_id from auth middleware
 
     // Get the teacher_id from teachers table
-    const { data: teacherData, error: teacherError } = await supabase
+    const { data: teacherData, error: teacherError } = await withRetry(() => supabase
       .from('teachers')
       .select('teacher_id')
       .eq('teacher', user_id)
-      .single();
+      .single(), 3, 2000, 'getMyTeacherId');
 
     if (teacherError || !teacherData) {
       return res.status(404).json({

@@ -35,6 +35,14 @@ const tutorInfoRoutes = require("./routes/tutorInfoRoute");
 const demoRoutes = require("./routes/demoRoutes");
 const subTeacherRoutes = require("./routes/subTeacherRoutes");
 const academicNotificationsRoutes = require("./routes/academicNotificationsRoutes");
+const managerNotificationsRoutes = require("./routes/managerNotificationsRoutes");
+const adminNotificationsRoutes = require("./routes/adminNotificationsRoutes");
+const financeNotificationsRoutes = require("./routes/financeNotificationsRoutes");
+const stateNotificationsRoutes = require("./routes/stateNotificationsRoutes");
+const centerNotificationsRoutes = require("./routes/centerNotificationsRoutes");
+const resourceNotificationsRoutes = require("./routes/resourceNotificationsRoutes");
+const cardAdminNotificationsRoutes = require("./routes/cardAdminNotificationsRoutes");
+
 
 
 
@@ -56,6 +64,7 @@ app.use("/api/leads", leadsRoutes);
 app.use('/api', usersRoutes);
 app.use('/api', academicCoordinatorsRoutes);
 app.use('/api', centersRoutes);
+app.use("/api", centerNotificationsRoutes);
 app.use('/api', batchesRoutes);
 app.use('/api', enrollmentsRoutes);
 app.use('/api', financialPartnersRoutes);
@@ -72,6 +81,13 @@ app.use("/api", cardAdminRoutes);
 app.use("/api", demoRoutes);
 app.use("/api", subTeacherRoutes);
 app.use("/api", academicNotificationsRoutes);
+app.use("/api", managerNotificationsRoutes);
+app.use("/api", adminNotificationsRoutes);
+app.use("/api/finance-notifications", financeNotificationsRoutes);
+app.use("/api", stateNotificationsRoutes);
+app.use("/api", resourceNotificationsRoutes);
+app.use("/api/card-admin", cardAdminNotificationsRoutes);
+
 
 // Health check endpoint
 app.get('/health', (req, res) => {

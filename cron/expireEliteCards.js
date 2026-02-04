@@ -1,5 +1,6 @@
 // file: cron/expireEliteCards.js
 const { supabaseAdmin } = require("../config/supabaseClient");
+const { withRetry } = require("../utils/httpClient");
 const cron = require("node-cron");
 
 // 🔄 Daily cron job: runs at 12:00 AM IST every day
@@ -27,11 +28,11 @@ cron.schedule("0 0 * * *", async () => {
       );
 
       // First, let's check which cards are eligible for expiry (for debugging)
-      const { data: eligibleCards, error: checkError } = await supabaseAdmin
+      const { data: eligibleCards, error: checkError } = await withRetry(() => supabaseAdmin
         .from("elite_card_generate")
         .select("id, card_number, name_on_the_pass, valid_thru, status")
         .eq("status", "approved")
-        .lte("valid_thru", todayDateStr); // valid_thru <= today (expired on or before today)
+        .lte("valid_thru", todayDateStr), 3, 2000, 'Cron:CheckEligibleCards');
 
       if (checkError) {
         console.error(
@@ -59,7 +60,7 @@ cron.schedule("0 0 * * *", async () => {
       // Only expire cards that:
       // 1. Have status = 'approved' (only approved cards can expire)
       // 2. valid_thru <= today (expired on or before today)
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await withRetry(() => supabaseAdmin
         .from("elite_card_generate")
         .update({
           status: "expired",
@@ -67,7 +68,7 @@ cron.schedule("0 0 * * *", async () => {
         })
         .eq("status", "approved") // Only update approved cards
         .lte("valid_thru", todayDateStr) // valid_thru <= today (expired on or before today)
-        .select(); // ✅ Ensure Supabase returns updated rows
+        .select(), 3, 2000, 'Cron:ExpireCards');
 
       if (error) {
         console.error(
